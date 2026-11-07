@@ -3,7 +3,7 @@ from pathlib import Path
 from pypdf import PdfReader
 
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parents[2]
 pdf_files = sorted((BASE_DIR / "docs").glob("*.pdf"))
 
 if len(pdf_files) != 1:

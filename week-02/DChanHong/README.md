@@ -12,6 +12,7 @@ IPO 신규 상장을 위한 증권신고서 PDF로, 질문과 관련된 내용�
 |---|---|
 | 자료 | `[동원파츠][정정]증권신고서(지분증권)(2026.10.30).pdf` |
 | 원본 | [PDF 파일](<docs/[동원파츠][정정]증권신고서(지분증권)(2026.10.30).pdf>) |
+| 출처 | [금융감독원 전자공시시스템(DART)](https://dart2.fss.or.kr/dsab007/main.do)에서 다운로드했습니다. |
 | 분량 | PDF 123페이지 |
 | 주요 내용 | 공모가격 확정, 공모 조건 및 자금 사용 계획 등의 정정 전후 내용 |
 | 선정 이유 | 공모주 청약 판단에 필요한 정보를 문서에서 찾는 과정을 실습하고, 금액·단위·정정 시점을 구분해 답할 수 있는지 확인하기 위해 선택했습니다. |
@@ -73,7 +74,29 @@ PDF → 텍스트 추출 → 정정 전후 구간 구분 → 청크 분할
 - **모델 입력:** 질문과 검색 근거만 전달하며, 예상 답변과 참고 페이지는 평가용으로 분리했습니다.
 - **답변 원칙:** 정정 전후·단위·계획과 실적을 구분하고, 근거가 부족하면 확인할 수 없다고 안내하도록 구성했습니다.
 
-## 4. 질문·답변 결과
+## 4. 실행 방법
+
+저장소 루트에서 아래 순서로 실행합니다. API 호출 전 `DChanHong` 폴더의 `.env`에 `OPENAI_API_KEY`를 설정합니다.
+
+```bash
+cd week-02/DChanHong
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+
+# 최초 데이터 준비 및 인덱싱
+python script/test/check_pdf.py
+python script/test/check_sections.py
+python script/test/check_chunks.py
+python script/test/check_index.py
+
+# 질문 3개 테스트
+python main.py
+```
+
+환경과 DB가 준비된 경우 가상환경 활성화 후 `python main.py`만 실행합니다. 결과는 `output/rag_runs/<실행시각>/`에 저장됩니다.
+
+## 5. 질문·답변 결과
 
 | 번호 | 질문 | 실제 답변 요약 | 실행 기록 |
 |---|---|---|---|
