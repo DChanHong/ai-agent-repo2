@@ -5,14 +5,16 @@ import json
 import time
 from pathlib import Path
 
-from .api import CallRecorder, make_async_client
-from .common import environment_info, json_hash, load_dataset, new_id, now_iso, sha256_file, validate_versions, write_json
-from .config import BASE_DIR, DATASET_PATH, EVALUATION_MODEL, EVALUATION_EMBEDDING_MODEL, JUDGE_PROMPT_PATH, PRICE_SNAPSHOT
+from common.api import CallRecorder, make_async_client
+from common.utils import json_hash, new_id, now_iso, sha256_file, write_json
+from common.validation import environment_info, load_dataset, validate_versions
+from config import BASE_DIR, DATASET_PATH, EVALUATION_MODEL, EVALUATION_EMBEDDING_MODEL, PRICE_SNAPSHOT
+from prompts.judge import JUDGE_PROMPT, JUDGE_PROMPT_VERSION
 from .judge import evaluate_judge
-from .metrics import METRIC_NAMES, evaluate_metrics
-from .report import derive, save_evaluation, summarize
+from .ragas_metrics import METRIC_NAMES, evaluate_metrics
+from reporting.summary import derive, save_evaluation, summarize
 from .rules import evaluate_rules
-from .schemas import EvaluationManifest, JudgeResult, RagManifest, RagRecord
+from schemas import EvaluationManifest, JudgeResult, RagManifest, RagRecord
 
 
 def pending_evaluation(eval_id: str, golden, rag: dict) -> dict:
@@ -34,7 +36,7 @@ def pending_evaluation(eval_id: str, golden, rag: dict) -> dict:
 
 def build_manifest(eval_id: str, rag_id: str, rag_paths: list[Path], dataset) -> dict:
     """평가에 사용한 원본 해시·모델·프롬프트·출력 스키마를 기록."""
-    prompt = JUDGE_PROMPT_PATH.read_text(encoding="utf-8").strip()
+    prompt = JUDGE_PROMPT
     schema = JudgeResult.model_json_schema()
     common_settings = {"sdk_timeout_seconds": 120, "sdk_max_retries": 2, "api_concurrency": 1, "cache": False}
     return {
@@ -49,7 +51,7 @@ def build_manifest(eval_id: str, rag_id: str, rag_paths: list[Path], dataset) ->
             "embedding": {"model": EVALUATION_EMBEDDING_MODEL, "settings": {**common_settings, "dimensions": 3072}},
             "judge": {"model": EVALUATION_MODEL, "settings": {**common_settings, "reasoning": {"effort": "medium"}, "max_output_tokens": 8192, "store": False, "service_tier": "default"}},
         },
-        "judge_prompt": {"version": "judge_v1", "text": prompt, "sha256": hashlib.sha256(prompt.encode()).hexdigest()},
+        "judge_prompt": {"version": JUDGE_PROMPT_VERSION, "text": prompt, "sha256": hashlib.sha256(prompt.encode()).hexdigest()},
         "judge_schema": {"version": "judge_result_v1", "json_schema": schema, "sha256": json_hash(schema)},
         "pricing": PRICE_SNAPSHOT,
     }

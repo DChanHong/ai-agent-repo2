@@ -7,7 +7,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from eval.schemas import (
+from schemas import (
     DerivedResult,
     GenerationResult,
     GoldenDataset,
@@ -44,7 +44,7 @@ class SchemaTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """검증 대상인 실제 골든 JSON을 읽어 둔다."""
-        path = Path(__file__).resolve().parents[1] / "eval/datasets/golden_v1.json"
+        path = Path(__file__).resolve().parents[1] / "data/golden/golden_v1.json"
         cls.golden = json.loads(path.read_text(encoding="utf-8"))
 
     def test_golden_complete_and_unknown_reference_rejected(self):

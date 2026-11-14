@@ -5,8 +5,8 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from .common import sha256_file
-from .config import (
+from common.utils import sha256_file
+from config import (
     BASE_DIR,
     CHUNKS_PATH,
     COLLECTION_NAME,

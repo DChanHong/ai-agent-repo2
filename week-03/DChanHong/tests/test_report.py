@@ -9,11 +9,12 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from eval.config import DATASET_PATH
-from eval.evaluate import pending_evaluation
-from eval.rag import pending_record
-from eval.report import derive, import_review, load_records, review_template, save_evaluation, summarize
-from eval.schemas import GoldenDataset, HumanReview
+from config import DATASET_PATH
+from evaluation.runner import pending_evaluation
+from rag.pipeline import pending_record
+from reporting.summary import derive, load_records, save_evaluation, summarize
+from reporting.human_review import import_review, review_template
+from schemas import GoldenDataset, HumanReview
 
 
 def synthetic_rag(question):

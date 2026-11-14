@@ -5,7 +5,7 @@ import re
 from collections import Counter
 from decimal import Decimal, ROUND_HALF_UP
 
-from .schemas import GoldenQuestion
+from schemas import GoldenQuestion
 
 
 ALIASES = {

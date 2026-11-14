@@ -7,12 +7,12 @@ import unittest
 import httpx
 from openai import AsyncOpenAI
 
-from eval.api import AsyncRecordingTransport, CallRecorder
-from eval.config import DATASET_PATH, EVALUATION_MODEL
-from eval.judge import evaluate_judge
-from eval.metrics import RecordedRagasLLM, evaluate_metrics, is_pure_abstention
-from eval.rules import evaluate_rules
-from eval.schemas import GoldenDataset, JudgeEvaluation, RagasResults, RuleResult
+from common.api import AsyncRecordingTransport, CallRecorder
+from config import DATASET_PATH, EVALUATION_MODEL
+from evaluation.judge import evaluate_judge
+from evaluation.ragas_metrics import RecordedRagasLLM, evaluate_metrics, is_pure_abstention
+from evaluation.rules import evaluate_rules
+from schemas import GoldenDataset, JudgeEvaluation, RagasResults, RuleResult
 
 
 def fixture(question, response="주당 평가가액은 32,783원입니다. [E1]"):

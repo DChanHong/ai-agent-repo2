@@ -10,11 +10,11 @@ from unittest.mock import patch
 import httpx
 from openai import AsyncOpenAI, OpenAI
 
-from eval.api import AsyncRecordingTransport, RecordingTransport
-from eval.evaluate import run_evaluation
-from eval.metrics import blank_metric
-from eval.rag import run_generation
-from eval.report import load_records
+from common.api import AsyncRecordingTransport, RecordingTransport
+from evaluation.runner import run_evaluation
+from evaluation.ragas_metrics import blank_metric
+from rag.pipeline import run_generation
+from reporting.summary import load_records
 from test_rag import FakeCollection
 
 
@@ -78,9 +78,9 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
         """10문항 저장·원본 복사·N/A·미검토·비용 분리·CSV 열 계약을 확인."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            with patch("eval.rag.make_client", generation_client), patch("eval.rag.validate_index", return_value=FakeCollection()):
+            with patch("rag.pipeline.make_client", generation_client), patch("rag.pipeline.validate_index", return_value=FakeCollection()):
                 rag_dir = run_generation(root / "rag_runs")
-            with patch("eval.evaluate.make_async_client", evaluation_client), patch("eval.evaluate.evaluate_metrics", metrics_result), patch("eval.evaluate.evaluate_judge", judge_result):
+            with patch("evaluation.runner.make_async_client", evaluation_client), patch("evaluation.runner.evaluate_metrics", metrics_result), patch("evaluation.runner.evaluate_judge", judge_result):
                 eval_dir = await run_evaluation(rag_dir, root / "eval_runs")
             records = load_records(eval_dir)
             self.assertEqual(len(records), 10)

@@ -3,8 +3,9 @@
 import json
 import time
 
-from .schemas import GoldenQuestion, JudgeResult
-from .config import EVALUATION_MODEL, EVALUATION_MAX_OUTPUT_TOKENS, JUDGE_PROMPT_PATH
+from schemas import GoldenQuestion, JudgeResult
+from config import EVALUATION_MODEL, EVALUATION_MAX_OUTPUT_TOKENS
+from prompts.judge import JUDGE_PROMPT
 
 
 def judge_input(question: GoldenQuestion, rag: dict) -> dict:
@@ -56,7 +57,7 @@ async def evaluate_judge(question: GoldenQuestion, rag: dict, client, recorder) 
         with recorder.scope("judge", question.question_id):
             response = await client.responses.create(
                 model=EVALUATION_MODEL,
-                instructions=JUDGE_PROMPT_PATH.read_text(encoding="utf-8").strip(),
+                instructions=JUDGE_PROMPT,
                 input=json.dumps(inputs, ensure_ascii=False),
                 reasoning={"effort": "medium"}, max_output_tokens=EVALUATION_MAX_OUTPUT_TOKENS,
                 store=False, service_tier="default",

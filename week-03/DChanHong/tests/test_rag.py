@@ -8,8 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from eval.config import EMBEDDING_DIMENSIONS
-from eval.rag import generation_input, pending_record, process_question, retrieve, run_generation
+from config import EMBEDDING_DIMENSIONS
+from rag.pipeline import generation_input, pending_record, process_question, retrieve, run_generation
 
 
 class FakeCollection:
@@ -154,8 +154,8 @@ class RagTests(unittest.TestCase):
         """키 확인 실패를 모의해 API나 실행 결과 폴더가 생기지 않음을 확인한다."""
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory)
-            with patch("eval.rag.validate_index", return_value=FakeCollection()), patch(
-                "eval.rag.make_client", side_effect=ValueError("missing credentials")
+            with patch("rag.pipeline.validate_index", return_value=FakeCollection()), patch(
+                "rag.pipeline.make_client", side_effect=ValueError("missing credentials")
             ):
                 with self.assertRaisesRegex(ValueError, "missing credentials"):
                     run_generation(target)

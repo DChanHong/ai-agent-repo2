@@ -8,14 +8,14 @@ from unittest.mock import patch
 import httpx
 from openai import APITimeoutError, AsyncOpenAI, OpenAI
 
-from eval.api import (
+from common.api import (
     AsyncRecordingTransport,
     CallRecorder,
     RecordingTransport,
     aggregate_cost,
     usage_cost,
 )
-from eval.config import EVALUATION_MODEL
+from config import EVALUATION_MODEL
 
 
 def completion_body():

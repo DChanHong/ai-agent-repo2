@@ -2,12 +2,10 @@
 
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parents[1]
-DATASET_PATH = BASE_DIR / "eval/datasets/golden_v1.json"
-CHUNKS_PATH = BASE_DIR / "eval/data/chunks.json"
+BASE_DIR = Path(__file__).resolve().parent
+DATASET_PATH = BASE_DIR / "data/golden/golden_v1.json"
+CHUNKS_PATH = BASE_DIR / "data/rag/chunks.json"
 INDEX_PATH = BASE_DIR / "chroma_db"
-GENERATION_PROMPT_PATH = BASE_DIR / "eval/prompts/generation_v1.txt"
-JUDGE_PROMPT_PATH = BASE_DIR / "eval/prompts/judge_v1.txt"
 COLLECTION_NAME = "dongwon_20261030_v1"
 ANSWER_MODEL = "gpt-5.4-mini-2026-03-17"
 EMBEDDING_MODEL = "text-embedding-3-small"

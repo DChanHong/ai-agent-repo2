@@ -17,8 +17,8 @@ from ragas.metrics.collections import (
     AnswerRelevancy, ContextPrecision, ContextRecall, Faithfulness,
 )
 
-from .schemas import GoldenQuestion
-from .config import (
+from schemas import GoldenQuestion
+from config import (
     EVALUATION_MODEL, EVALUATION_EMBEDDING_MODEL,
     EVALUATION_EMBEDDING_DIMENSIONS, EVALUATION_MAX_OUTPUT_TOKENS,
 )

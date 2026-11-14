@@ -1,18 +1,32 @@
 # RAG 평가 실행 안내
 
-응답 생성 직전까지 준비한 코드다. 골든 10문항, Pydantic 검증, 기존 청크·색인 복사와 로컬 검증을 완료했다. 준비 상태 검증 명령과 로컬 테스트 33개가 통과했다. 모의 10문항 생성→평가→요약은 임시 폴더에서만 검증했으며 실제 응답 생성·자동 평가·사람 검토는 아직 실행하지 않았다.
+응답 생성 직전까지 준비한 코드다. 골든 10문항, Pydantic 검증, 기존 청크·색인 복사와 로컬 검증을 완료했다. 준비 상태 검증 명령과 로컬 테스트 36개가 통과했다. 모의 10문항 생성→평가→요약은 임시 폴더에서만 검증했으며 실제 응답 생성·자동 평가·사람 검토는 아직 실행하지 않았다.
 
-기준 문서는 [평가 설계](../docs/00-plan/EVALUATION_SPEC.md)와 [TODO](../docs/00-plan/TODO.md)다. 스키마의 단일 원본은 [schemas.py](schemas.py)이며, 별도 수작업 JSON Schema 파일은 사용하지 않는다.
+기준 문서는 [평가 설계](docs/00-plan/EVALUATION_SPEC.md)와 [TODO](docs/00-plan/TODO.md)다. 스키마의 단일 원본은 [schemas/](schemas/)이며, 별도 수작업 JSON Schema 파일은 사용하지 않는다.
+
+실행은 프로젝트 루트의 `main.py`에서 시작한다. 코드는 아래처럼 역할별로 나누며, 프롬프트는 Python 문자열 상수로 관리한다. manifest에는 실제 API에 전달한 프롬프트 전문과 해시를 남긴다. 프롬프트 해시는 `.py` 파일 전체가 아니라 실제 전달 문자열의 SHA-256이다.
+
+| 위치 | 역할 |
+|---|---|
+| `main.py`, `config.py` | 명령 진입점과 공통 설정 |
+| `common/` | API 호출 기록, 파일 처리, 데이터·환경 검증 |
+| `schemas/` | 골든·실행·평가·사람 검토의 Pydantic 모델 |
+| `rag/` | 기존 색인 검증과 검색·응답 생성 |
+| `evaluation/` | 저장된 답변의 Ragas·규칙·Judge 평가 |
+| `reporting/` | 사람 검토 이력과 JSON·CSV 요약 |
+| `prompts/` | 생성·Judge 프롬프트와 버전 상수 |
+| `data/golden/`, `data/rag/` | 골든 데이터와 기존 RAG 자료 |
+| `tests/` | 외부 API를 호출하지 않는 로컬 검증 |
 
 ## 준비된 환경과 자료
 
 - Python 3.13.2 가상환경 `.venv`, 직접 의존성 `pyproject.toml`, 해석된 전체 의존성 `uv.lock`.
 - `ragas==0.4.3`, `openai==2.54.0`, `instructor==1.17.0`, `chromadb==1.5.9`.
-- `datasets/golden_v1.json`: Q01~Q10의 골든 답변·원문·규칙·지표 정책.
-- `data/chunks.json`, `data/sections.json`: 2주차 원본 바이트를 유지한 자료. 청크 325개 중 정정 전 155개, 정정 후 165개, 안내 5개.
-- `../chroma_db/`: 기존 2주차 색인의 독립 복사본. 청크 ID·본문·메타데이터·1,536차원 벡터·해시·cosine 설정을 검증했다. 재임베딩 API 호출은 없었다.
-- `data/baseline.json`: 원본 Git 커밋·자료 해시·색인 재사용과 준비 비용 기록.
-- `prompts/generation_v1.txt`: 기존 생성 지침 전문. `prompts/judge_v1.txt`: 확정한 Judge 지침.
+- `data/golden/golden_v1.json`: Q01~Q10의 골든 답변·원문·규칙·지표 정책.
+- `data/rag/chunks.json`, `data/rag/sections.json`: 2주차 원본 바이트를 유지한 자료. 청크 325개 중 정정 전 155개, 정정 후 165개, 안내 5개.
+- `chroma_db/`: 기존 2주차 색인의 독립 복사본. 청크 ID·본문·메타데이터·1,536차원 벡터·해시·cosine 설정을 검증했다. 재임베딩 API 호출은 없었다.
+- `data/rag/baseline.json`: 원본 Git 커밋·자료 해시·색인 재사용과 준비 비용 기록.
+- `prompts/generation.py`의 `GENERATION_PROMPT`: 기존 생성 지침 전문. `prompts/judge.py`의 `JUDGE_PROMPT`: 확정한 Judge 지침.
 
 설치 호환성 보정으로 `langchain-community==0.4.1`을 고정했다. 0.4.2에서 제거된 VertexAI 모듈을 Ragas 0.4.3이 import하는 문제를 확인했으며, 0.4.1에서는 import와 네 지표의 모의 HTTP 실행을 검증했다. Ragas·OpenAI·Instructor의 합의 버전은 유지한다.
 
@@ -24,7 +38,7 @@
 
 ```sh
 cd /Users/root1/Desktop/ai-agent-repo2/week-03/DChanHong
-.venv/bin/python -m eval validate
+.venv/bin/python main.py validate
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
@@ -33,7 +47,7 @@ cd /Users/root1/Desktop/ai-agent-repo2/week-03/DChanHong
 기존 색인에서 다시 준비할 필요가 있을 때만 다음을 실행한다. 대상 색인이 이미 있으면 검증만 하며, 기존 파일을 덮어쓰지 않는다.
 
 ```sh
-.venv/bin/python -m eval prepare-index --source ../../week-02/DChanHong/chroma_db
+.venv/bin/python main.py prepare-index --source ../../week-02/DChanHong/chroma_db
 ```
 
 ## 2. 응답 생성 — 사용자가 실행
@@ -41,7 +55,7 @@ cd /Users/root1/Desktop/ai-agent-repo2/week-03/DChanHong
 사용자가 `OPENAI_API_KEY` 환경 변수 또는 프로젝트의 `.env`에 키를 설정한다. `.env`를 처음 만들 때는 `cp -n .env.example .env`로 기존 파일을 보존한 뒤 예시 값을 직접 교체한다. 준비 작업에서는 실제 `.env` 내용과 키를 읽거나 확인하지 않았다.
 
 ```sh
-.venv/bin/python -m eval generate
+.venv/bin/python main.py generate
 ```
 
 이 명령부터 질문 임베딩·응답 생성 API를 호출한다. Q01~Q10을 각각 한 번 실행하고 새 `output/rag_runs/<rag_run_id>/` 경로를 출력한다. 키가 없으면 API 호출 전에 중단한다. 새 실행은 새 폴더를 사용하므로 기존 결과를 덮어쓰지 않는다.
@@ -56,7 +70,7 @@ API가 끝났어도 빈 답변이나 출력 잘림은 `needs_check`다. 오류�
 응답 생성에서 출력된 실제 경로를 사용한다. 평가 명령은 새 답변을 생성하지 않고 저장된 RAG 결과를 읽으며, 평가용 API를 호출한다.
 
 ```sh
-.venv/bin/python -m eval evaluate output/rag_runs/<rag_run_id>
+.venv/bin/python main.py evaluate "output/rag_runs/<rag_run_id>"
 ```
 
 | 지표 | 무엇을 평가하는가 | 입력 | 적용 문항 |
@@ -77,9 +91,9 @@ Ragas의 실제 내부 근거를 보존한다. 근거 미확보를 점수만으�
 사람이 원문·질문·실제 답변을 대조해 10문항을 모두 검토한다. 문항별 빈 검토 양식을 만들고 내용을 직접 채운 뒤 가져온다.
 
 ```sh
-.venv/bin/python -m eval review-template output/eval_runs/<eval_run_id> Q01 /tmp/Q01-review.json
-.venv/bin/python -m eval import-review output/eval_runs/<eval_run_id> Q01 /tmp/Q01-review.json
-.venv/bin/python -m eval summarize output/eval_runs/<eval_run_id>
+.venv/bin/python main.py review-template "output/eval_runs/<eval_run_id>" Q01 /tmp/Q01-review.json
+.venv/bin/python main.py import-review "output/eval_runs/<eval_run_id>" Q01 /tmp/Q01-review.json
+.venv/bin/python main.py summarize "output/eval_runs/<eval_run_id>"
 ```
 
 정확성·인용 적절성·답변 범위가 모두 `pass`일 때만 사람의 최종 판정을 통과로 계산한다. 사람 검토 이력은 추가하며 자동 결과를 수정하지 않는다. 요약 명령은 상세 JSON에서 `summary.json`과 문항별 `summary.csv`를 다시 만든다.

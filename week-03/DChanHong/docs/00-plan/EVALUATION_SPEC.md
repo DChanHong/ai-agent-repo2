@@ -5,7 +5,7 @@
 
 상태: 설계에 따라 골든·Pydantic 모델·실행·평가·기록 코드를 준비했다. 고정 패키지 설치, 기존 색인 검증, 모의 HTTP 기반 지표 연결을 확인했다. 실제 응답 생성·평가 API 호출·사람 검토는 아직 실행하지 않았으며, 최종 로컬 검증 상태는 [TODO.md](TODO.md)에 기록한다.
 
-이 문서는 [전체 계획](PLAN.md)에 이어 대화에서 확정한 평가 질문 10개, 골든 데이터, Ragas 지표, 규칙 검사, LLM Judge, 파일 구조와 JSON·CSV 필드 계약을 기록한다. 아래 예시는 실제 실행 결과가 아니다. `eval/`에는 실행 코드를 준비했으며, 정식 `output/` 결과는 사용자가 실행한 뒤 생성한다.
+이 문서는 [전체 계획](PLAN.md)에 이어 대화에서 확정한 평가 질문 10개, 골든 데이터, Ragas 지표, 규칙 검사, LLM Judge, 파일 구조와 JSON·CSV 필드 계약을 기록한다. 아래 예시는 실제 실행 결과가 아니다. `main.py`와 역할별 패키지에 실행 코드를 준비했으며, 정식 `output/` 결과는 사용자가 실행한 뒤 생성한다.
 
 바로가기:
 
@@ -612,19 +612,25 @@ week-03/DChanHong/
 │   │   └── TODO.md
 │   └── 01-document/
 │       └── 원문 PDF
-├── eval/
-│   ├── README.md
-│   ├── schemas.py
-│   ├── __main__.py
-│   ├── config.py / common.py / api.py
-│   ├── index.py / rag.py
-│   ├── evaluate.py / metrics.py / rules.py / judge.py / report.py
-│   ├── datasets/
+├── README.md
+├── main.py                        # 명령 진입점
+├── config.py                      # 모델·검색·경로 설정
+├── common/
+│   └── api.py / utils.py / validation.py
+├── schemas/                       # Pydantic 모델과 패키지 내보내기
+├── rag/
+│   └── index.py / pipeline.py
+├── evaluation/
+│   └── runner.py / ragas_metrics.py / rules.py / judge.py
+├── reporting/
+│   └── summary.py / human_review.py
+├── prompts/
+│   └── generation.py / judge.py   # 프롬프트 문자열·버전 상수
+├── data/
+│   ├── golden/
 │   │   └── golden_v1.json
-│   ├── data/
-│   │   └── chunks.json / sections.json / baseline.json
-│   └── prompts/
-│       └── generation_v1.txt / judge_v1.txt
+│   └── rag/
+│       └── chunks.json / sections.json / baseline.json
 ├── tests/
 ├── chroma_db/                       # 기존 색인 복사본, Git 제외
 └── output/
@@ -644,17 +650,19 @@ week-03/DChanHong/
             └── summary.csv
 ```
 
+- 실행 진입점은 `main.py`다. 프로젝트 폴더에서 `python main.py validate`, `python main.py generate`, `python main.py evaluate "<RAG 실행 경로>"` 순으로 사용한다. 전체 명령은 [README](../../README.md)를 따른다.
+- 생성 지침은 `prompts/generation.py`의 `GENERATION_PROMPT`, Judge 지침은 `prompts/judge.py`의 `JUDGE_PROMPT`에서 가져온다. 내용·버전은 유지하며 manifest에는 실제 전달 문자열과 그 SHA-256을 기록한다. 프롬프트 해시는 Python 파일 전체가 아닌 실제 전달 문자열을 기준으로 계산한다.
 - `rag_run_id`는 검색·생성 실행, `eval_run_id`는 저장된 답변의 평가 실행을 식별한다.
 - 같은 답변을 재평가하면 `rag_run_id`는 유지하고 새로운 `eval_run_id`를 발급한다.
 - 골든 데이터·프롬프트·평가 기준이 바뀌면 버전을 올리고 이전 결과를 덮어쓰지 않는다.
 - 사람 판정은 해당 평가 실행의 문항별 검토 이력에 추가한다.
 - 문항별 평가 JSON은 검토에 필요한 골든·RAG 원본 복사본을 포함한다. 원본 경로·해시로 연결하여 동일한 입력인지 확인한다.
 - `summary.csv`와 `summary.json`은 상세 JSON에서 재생성할 수 있는 파생 파일이다.
-- 여섯 JSON 계약은 `eval/schemas.py`의 `GoldenDataset`, `RagManifest`, `RagRecord`, `EvaluationManifest`, `EvaluationRecord`, `JudgeResult`로 검증한다. 필요한 API 출력 JSON Schema는 `model_json_schema()`로 생성하며 별도 수작업 스키마 파일을 유지하지 않는다.
+- 여섯 JSON 계약은 `schemas/`의 `GoldenDataset`, `RagManifest`, `RagRecord`, `EvaluationManifest`, `EvaluationRecord`, `JudgeResult`로 검증한다. 필요한 API 출력 JSON Schema는 `model_json_schema()`로 생성하며 별도 수작업 스키마 파일을 유지하지 않는다.
 
 ## 8. JSON 필드 계약
 
-아래는 확정한 필드·자료형·의미다. `eval/schemas.py`의 Pydantic 모델이 저장 파일을 검증한다. 오류 코드·실행 ID 생성 방식·규칙 종류별 값 구조 등은 기존 의미를 유지하는 최소 구현으로 정하며, 추가 설계 인터뷰의 선행 조건으로 두지 않는다.
+아래는 확정한 필드·자료형·의미다. `schemas/`의 Pydantic 모델이 저장 파일을 검증한다. 오류 코드·실행 ID 생성 방식·규칙 종류별 값 구조 등은 기존 의미를 유지하는 최소 구현으로 정하며, 추가 설계 인터뷰의 선행 조건으로 두지 않는다.
 
 ### 8.0 공통 자료형·필수 필드·null 원칙
 
@@ -1019,7 +1027,7 @@ LLM 비용 = ((입력 토큰 - 캐시 입력 토큰) × 일반 입력 단가
 ### 10.2 구현할 작업
 
 1. 이 문서의 Q01~Q10을 `golden_v1.json`으로 옮기고 C/G/규칙 식별자, 원문 발췌, 부재 검토 기록을 채운다.
-2. `judge_v1.txt`와 `eval/schemas.py`의 Pydantic 모델을 작성한다. API 출력 JSON Schema는 모델로부터 생성한다.
+2. `prompts/judge.py`의 `JUDGE_PROMPT`와 `schemas/`의 Pydantic 모델을 작성한다. API 출력 JSON Schema는 모델로부터 생성한다.
 3. 2주차 기준 코드를 보존한 채 3주차 실행·기록 코드를 준비한다.
 4. 검색에는 질문을, 생성에는 질문과 실제 검색 근거를 전달한다. 골든 정답·라벨·평가 기준을 분리하고 실제 입력과 원본 답변을 기록한다.
 5. 저장된 결과에 Ragas·규칙·Judge 평가를 수행하고 문항별 점수·평가 이유·각 상태를 기록한다.

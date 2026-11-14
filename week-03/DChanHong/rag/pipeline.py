@@ -5,9 +5,10 @@ import json
 import time
 from pathlib import Path
 
-from .api import CallRecorder, make_client
-from .common import environment_info, load_dataset, new_id, now_iso, sha256_file, validate_versions, write_json
-from .config import (
+from common.api import CallRecorder, make_client
+from common.utils import new_id, now_iso, sha256_file, write_json
+from common.validation import environment_info, load_dataset, validate_versions
+from config import (
     ANSWER_MODEL,
     API_MAX_RETRIES,
     API_TIMEOUT,
@@ -17,14 +18,14 @@ from .config import (
     DATASET_PATH,
     EMBEDDING_DIMENSIONS,
     EMBEDDING_MODEL,
-    GENERATION_PROMPT_PATH,
     INDEX_PATH,
     MAX_OUTPUT_TOKENS,
     PRICE_SNAPSHOT,
     TOP_K_PER_REVISION,
 )
 from .index import validate_index
-from .schemas import RagManifest, RagRecord
+from schemas import RagManifest, RagRecord
+from prompts.generation import GENERATION_PROMPT, GENERATION_PROMPT_VERSION
 
 
 def retrieve(collection, query_vector: list[float]) -> list[dict]:
@@ -205,7 +206,7 @@ def build_manifest(run_id: str, dataset, instructions: str) -> dict:
             "generation": {"model": ANSWER_MODEL, "settings": {"reasoning": {"effort": "none"}, "max_output_tokens": MAX_OUTPUT_TOKENS, "store": False, "service_tier": "default", "sdk_timeout_seconds": API_TIMEOUT, "sdk_max_retries": API_MAX_RETRIES}},
         },
         "prompt": {
-            "version": "generation_v1", "text": instructions,
+            "version": GENERATION_PROMPT_VERSION, "text": instructions,
             "sha256": hashlib.sha256(instructions.encode("utf-8")).hexdigest(),
         },
         "pricing": PRICE_SNAPSHOT,
@@ -218,7 +219,7 @@ def run_generation(output_dir: Path | None = None) -> Path:
     dataset = load_dataset()
     questions = [(item.question_id, item.question) for item in dataset.questions]
     collection = validate_index()
-    instructions = GENERATION_PROMPT_PATH.read_text(encoding="utf-8")
+    instructions = GENERATION_PROMPT
     run_id = new_id("rag")
     run_dir = (Path(output_dir) if output_dir is not None else BASE_DIR / "output/rag_runs") / run_id
     manifest = build_manifest(run_id, dataset, instructions)
