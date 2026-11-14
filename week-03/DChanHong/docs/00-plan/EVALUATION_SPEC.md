@@ -1,21 +1,23 @@
 # RAG 평가 설계 확정 사항
 
 작성일: 2026-11-11
+최종 갱신: 2026-11-14
 
-상태: 설계 확정 및 문서화. 평가 코드 구현·API 호출·실제 평가 실행 전.
+상태: 설계 확정 및 문서화. 추가 설계 논의를 마치고 구현·테스트로 진행한다. 패키지 설치·호환성 검증·평가 코드 구현·실제 평가 실행은 아직 완료하지 않았다.
 
 이 문서는 [전체 계획](PLAN.md)에 이어 대화에서 확정한 평가 질문 10개, 골든 데이터, Ragas 지표, 규칙 검사, LLM Judge, 파일 구조와 JSON·CSV 필드 계약을 기록한다. 아래 예시는 실제 실행 결과가 아니다. `eval/`과 `output/`의 파일은 향후 구현할 산출물이다.
 
 바로가기:
 
 - [평가 질문 10개와 골든 데이터](#3-확정한-평가-질문과-골든-데이터)
+- [고정 버전과 평가 호출 설정](#13-고정-버전과-평가-호출-설정)
 - [Ragas 지표와 적용 범위](#4-ragas-지표-4개와-적용-범위)
 - [규칙 검사와 Judge의 역할](#5-규칙-검사와-llm-judge의-역할)
 - [Judge 프롬프트와 출력](#6-llm-judge-프롬프트와-출력)
 - [파일 구조](#7-확정한-파일-구조와-실행-식별)
 - [JSON 필드 계약](#8-json-필드-계약)
 - [요약 CSV와 집계 JSON](#9-요약-csv와-집계-json)
-- [남은 결정과 구현 작업](#10-남은-결정과-구현-작업)
+- [구현과 테스트 범위](#10-구현과-테스트-범위)
 
 ## 1. 평가 목적과 고정 원칙
 
@@ -51,6 +53,8 @@
 
 | 대상 | 버전·값 |
 |---|---|
+| Ragas 내부 평가 LLM | 네 지표 공통 `gpt-5.4-2026-03-05` |
+| Answer Relevancy 평가 임베딩 | `text-embedding-3-large`, 3,072차원 |
 | 별도 LLM Judge 모델 | `gpt-5.4-2026-03-05` |
 | Judge 프롬프트 | `judge_v1` |
 | Judge 출력 스키마 | `judge_result_v1` |
@@ -58,7 +62,46 @@
 | RAG 공통·문항 스키마 | `rag_manifest_v1`, `rag_record_v1` |
 | 평가 공통·문항 스키마 | `evaluation_manifest_v1`, `evaluation_record_v1` |
 
-별도 Judge는 문항별 1회 호출로 세 항목을 함께 판단하고 JSON으로 출력한다. Ragas 내부 호출과 별도 Judge 호출은 구분한다. Ragas용 평가 LLM·임베딩 모델은 아직 별도로 확정하지 않았다.
+별도 Judge는 문항별 1회 평가로 세 항목을 함께 판단하고 JSON으로 출력한다. Ragas 내부 호출과 별도 Judge 호출의 입력·결과·사용량은 구분한다. 같은 평가 모델을 사용하므로 두 결과를 서로 독립적인 모델의 합의로 해석하지 않는다. 검색용 `text-embedding-3-small` 1,536차원과 평가용 임베딩의 설정·사용량도 구분한다.
+
+### 1.3 고정 버전과 평가 호출 설정
+
+| 구성 요소 | 확정 버전 |
+|---|---|
+| Ragas | `ragas==0.4.3` |
+| OpenAI Python SDK | `openai==2.54.0` |
+| Instructor | `instructor==1.17.0` |
+
+버전 선택은 공식 자료와 소스 검토를 바탕으로 한 결정이며, 설치·실제 API 호출 호환성 검증을 마쳤다는 뜻은 아니다. 검토한 SDK `3.51.0`의 `jiter>=0.16` 조건과 Instructor `1.17.0`의 `jiter<0.15` 조건이 충돌하여, 해당 의존성 범위가 겹치는 SDK `2.54.0`을 선택했다. 구현 시 설치와 연동을 확인하고 나머지 의존성도 lock 파일로 고정하며 실제 Python·패키지 버전을 기록한다.
+
+Ragas는 `ragas.metrics.collections`의 `ContextPrecision`, `ContextRecall`, `Faithfulness`, `AnswerRelevancy`를 사용한다. OpenAI 비동기 클라이언트와 Instructor 연동을 사용하고, 평가 임베딩에는 선택한 모델과 차원을 명시한다.
+
+| 항목 | Ragas 내부 평가 | 별도 LLM Judge |
+|---|---|---|
+| 모델 | `gpt-5.4-2026-03-05` | `gpt-5.4-2026-03-05` |
+| API | Chat Completions + Instructor | Responses |
+| 추론 강도 | `reasoning_effort="medium"` | `reasoning={"effort":"medium"}` |
+| 출력 토큰 상한 | `max_completion_tokens=8192` | `max_output_tokens=8192` |
+| 샘플링 설정 | `temperature`, `top_p` 생략 | `temperature`, `top_p` 생략 |
+| 출력 검증 | Ragas 기본 JSON 모드 + Pydantic | `judge_result_v1`, Structured Outputs `strict=true` |
+| 저장 옵션 | `store=False` | `store=False` |
+
+출력 토큰 상한에는 추론 토큰도 포함된다. Ragas 0.4.3의 모델명 판별은 `gpt-5.4`를 제대로 인식하지 못하므로, 연결부에서 기본 `max_tokens`, `temperature`, `top_p`를 제거하고 위 파라미터가 실제 요청에 전달되도록 보정·확인한다. Ragas의 지표 계산식과 기본 평가 프롬프트는 유지한다. 생성 RAG의 추론 수준 `none`과 출력 상한 2,000토큰에는 평가 설정을 적용하지 않는다.
+
+| 실행 항목 | 확정 기준 |
+|---|---|
+| 평가 횟수 | 저장된 답변마다 적용 대상 지표와 Judge를 각각 1회 평가 |
+| Answer Relevancy | `strictness=3`: 한 평가에서 역질문 3개 생성 |
+| 동시 호출 | 평가 API 전체에서 최대 1개; 지표 내부 호출도 포함 |
+| SDK timeout | `120초`; 전체 지표·문항의 총 제한 시간으로 해석하지 않음 |
+| 통신 오류 재시도 | SDK `max_retries=2`, 최초 요청 포함 최대 3번 |
+| 추가 재시도 | Instructor `max_retries=0`, 평가 전체 자동 재실행 없음 |
+| 형식 오류·출력 잘림 | 원본을 보존하고 평가 오류로 기록 |
+| 로컬 평가 결과 캐시 | 사용하지 않음 |
+
+LLM 호출은 비용 기준에 맞춰 `service_tier="default"`를 명시하고 실제 응답의 처리 등급도 기록한다. SDK의 재시도와 평가 횟수를 구분하며, 재시도도 호출 기록과 비용·시간에 포함한다.
+
+재현을 위해 패키지 버전·실제 요청 설정·Ragas 기본 프롬프트와 출력 스키마 및 해시·Judge 프롬프트 버전·원본 응답·usage·오류를 보존한다. 모델과 설정을 고정해도 결과의 완전한 동일성을 보장하지는 않는다.
 
 ## 2. 원문과 근거 기록 원칙
 
@@ -304,7 +347,7 @@
 | 생성 | Faithfulness | 실제 답변의 사실 주장이 제공된 컨텍스트에 의해 뒷받침되는지 | `user_input`, 전체 `response`, 실제 제공 컨텍스트를 담은 `retrieved_contexts` |
 | 생성 | Answer Relevancy | 답변이 질문과 얼마나 관련되는지 | `user_input`, 전체 `response`; 평가 LLM과 평가용 임베딩 모델 필요 |
 
-Ragas 내부 평가용 LLM도 생성 모델과 다른 모델을 사용한다. 정확한 Ragas 버전·구현 클래스·어댑터는 구현 시 기록한다. 별도 Judge의 `judge_v1`을 Ragas 내부 프롬프트 대신 사용하지 않는다.
+Ragas 내부 평가용 LLM도 생성 모델과 다른 모델을 사용한다. 고정 버전·구현 클래스·연동 방식은 1.3절을 따르며 실제 실행 설정을 기록한다. 별도 Judge의 `judge_v1`을 Ragas 내부 프롬프트 대신 사용하지 않는다.
 
 ### 4.2 문항별 적용표
 
@@ -601,7 +644,58 @@ week-03/DChanHong/
 
 ## 8. JSON 필드 계약
 
-아래는 확정한 필드·자료형·의미다. 실제 JSON Schema 파일과 데이터 파일은 구현 단계에서 작성한다. 파일 경로·실행 ID의 구체적인 문자열 생성 방식 등 구현 세부는 실제 코드와 함께 고정한다.
+아래는 확정한 필드·자료형·의미다. 실제 JSON Schema 파일과 데이터 파일은 구현 단계에서 작성한다. 오류 코드·실행 ID 생성 방식·규칙 종류별 값 구조 등은 기존 의미를 유지하는 최소 구현으로 정하며, 추가 설계 인터뷰의 선행 조건으로 두지 않는다.
+
+### 8.0 공통 자료형·필수 필드·null 원칙
+
+파일 검증에는 JSON Schema Draft 2020-12를 사용한다. 우리가 정의한 고정 구조는 선언한 키를 모두 `required`로 지정하고 `additionalProperties: false`로 닫는다. 키의 존재와 값의 `null` 허용은 별개다. Judge 출력의 기존 키·enum은 유지하며 파일 검증용 조건을 API 출력에 임의로 추가하지 않는다.
+
+| 대상 | 자료형·제약 |
+|---|---|
+| `schema_version` | 각 레코드에 정의된 스키마 이름을 `const`로 고정 |
+| ID·모델명·버전·경로 | 비어 있지 않은 `string` |
+| 질문·골든 답변·원문 발췌 | 비어 있지 않은 `string` |
+| 주제·답변 가능 유형·상태·판정 | 이 문서에 정의한 `enum` |
+| SHA-256 | 소문자 16진수 64자리 문자열 |
+| 날짜·시각 | 시간대가 포함된 `date-time`; 형식 검증을 실제 활성화 |
+| 토큰 수·개수 | 0 이상 `integer`; 미확보 usage는 `null` 허용 |
+| 물리 PDF 페이지·검색 순위 | 1 이상 `integer` |
+| 인쇄 페이지 | 원문 표기를 보존하는 `string` 또는 `null` |
+| 비용·경과 시간 | 0 이상 유한 `number` 또는 상태에 따른 `null` |
+| 참·거짓 | `boolean`; 판단 전 상태가 필요한 항목만 `null` 허용 |
+
+숫자는 쉼표나 단위를 포함한 문자열로 저장하지 않는다. `NaN`, `Infinity`, 문자열 `"N/A"`를 결측값으로 사용하지 않는다. `golden`, `rag`, `ragas`, `rules`, `judge`, `derived` 등 정의한 구조는 항상 존재하며, 불완전한 빈 객체로 대신하지 않는다. `ragas`에는 적용 여부와 관계없이 네 지표 키가 모두 존재한다. 배열은 `null` 대신 `[]`를 사용하고 상태로 미실행과 대상 없음을 구분한다.
+
+API 원본 응답·원본 usage·원본 메타데이터는 별도로 지정한 원본 보관 영역에서 제공자의 추가 키를 허용한다. 실제 요청의 파라미터 생략과 명시적 `null`도 그대로 보존한다. 원본 영역의 유연성을 정규화된 결과 필드 전체로 확대하지 않는다.
+
+| 결과 필드 | `null` 허용 조건 |
+|---|---|
+| 실제 생성 답변 | 미수신; 실제 빈 응답 `""`는 그대로 보존하고 정상 답변으로 취급하지 않음 |
+| Ragas `inputs` | 평가 입력을 구성·전달하지 못함 |
+| Ragas `details` | 상세 근거 미확보; 정상 완료여도 가능하나 평가 이유 확보는 8.6절을 따름 |
+| `judge.result` | 정상 평가와 출력 검증을 완료하지 못함 |
+| `judge.raw_response` | 원래 출력 문자열 미확보; 확보 시 `string`으로 보존 |
+| 규칙 `verdict` | 미실행·적용 불가·실행 오류 |
+| 총비용 | 비용 집계 불완전; 확인된 비용 합계는 별도 기록 |
+| 최신 사람 검토 ID·최종 판정 | 완료된 사람 검토 없음 |
+| `behavior_matches_expected` | Judge 미완료 또는 `behavior.observed=unclear` |
+
+오류여도 확보한 실제 입력·원문 응답·usage·호출 기록은 지우지 않는다. 정상 실행과 데이터 수집 완전성은 독립적이다. 완료된 사람 검토만 `human_reviews`에 추가하므로 그 안의 세 항목 판정과 이유는 `null`을 허용하지 않는다.
+
+Ragas의 상태별 조건:
+
+| `evaluation_status` | `score` | `error` | `reason_code`, `reason` |
+|---|---|---|---|
+| `pending` | `null` | `null` | `null` 허용 |
+| `completed` | 유효한 숫자 | `null` | 확보한 근거 기록; 미확보 시 `null` 허용 |
+| `not_applicable`, `skipped` | `null` | `null` | 비어 있지 않은 문자열 필수 |
+| `error` | `null` | 오류 객체 필수 | 비어 있지 않은 문자열 필수 |
+
+Context Precision·Context Recall·Faithfulness의 점수는 `0~1`, Answer Relevancy는 코사인 유사도 범위를 반영해 `-1~1`을 허용한다. 범위 밖 값을 임의로 잘라 정상 점수로 저장하지 않는다. Judge의 `completed`는 유효한 `judge_result_v1`을 요구하며 다른 상태의 `result`는 `null`이다. Judge의 `needs_review`와 규칙의 `undetermined`는 정상 평가 결과이므로 `completed`에서 허용한다.
+
+실행 전에는 시작·종료 시각과 `elapsed_ms`를 `null`로 둔다. 실행 중에는 시작 시각만 기록하고 최종 종료 시각·경과 시간은 `null`이다. 종료하면 실제 측정값을 기록하며 유실된 시간을 0으로 대체하지 않는다. 실행하지 않기로 확정한 N/A·skipped 단계의 경과 시간은 0이다. `cost_complete=false`이면 총비용은 `null`이며, 확인된 비용 합계를 별도로 보존한다.
+
+타입·필수 필드·상태별 조건은 스키마로 검증한다. ID 중복·참조 실존, 인용문 일치, 해시 일치, 비용 합계, 시각 순서는 프로그램으로 검증한다.
 
 ### 8.1 골든 데이터셋 `golden_dataset_v1`
 
@@ -644,6 +738,8 @@ week-03/DChanHong/
 | 정책 `mode` | `run`, `conditional`, `not_applicable` |
 
 `absence_checks`는 Q07~Q10의 불가 부분에 작성하고 나머지는 빈 배열로 둔다. 규칙 기대값에서 적용되지 않는 필드는 `null`로 둔다. `formula`는 비교·검증용 표현이며 그대로 실행할 코드로 사용하지 않는다. 명시하지 않은 허용 오차를 임의로 도입하지 않는다.
+
+`documents`는 1개 이상, `questions`는 정확히 10개이며 Q01~Q10이 각각 한 번 존재해야 한다. `answerable_parts`는 Q07·Q08에서만 빈 배열이고, `unanswerable_parts`와 `absence_checks`는 Q07~Q10에서 내용이 있어야 한다. `retrieval_reference`는 Q07·Q08만 `null`, 나머지는 비어 있지 않은 문자열이다. `rounding_digits`는 0 이상 정수 또는 `null`, `tolerance`는 0 이상 숫자 또는 `null`이다. `tolerance: 0`과 `null`을 같은 값으로 바꾸지 않는다. 규칙의 기대값·관측값은 구현하는 규칙 종류에 맞춰 타입을 제한한다.
 
 ### 8.2 RAG 공통 기록 `rag_manifest_v1`
 
@@ -743,6 +839,8 @@ text
 
 `inputs`에는 지표에 실제 넘긴 값을 기록한다. 검색 지표용 컨텍스트와 Faithfulness의 실제 생성 컨텍스트를 구분한다. `details`에는 확보 가능한 프레임워크 판정 근거를 보존하며 확보하지 못하면 `null`로 둔다. 적용 불가나 오류를 0점·1점으로 채우지 않는다. `NaN` 등 비표준 JSON 숫자를 저장하지 않는다.
 
+이번 테스트는 문항별 점수뿐 아니라 평가 이유도 확인할 수 있어야 한다. 구현 시 Ragas 내부 판정·계산 근거를 수집하여 점수와 연결한다. 근거를 확보하지 못하면 미확보 상태를 보존하고, 사람이 실제 입력·출력을 검토한 설명을 `human_reviews.notes` 등에 별도로 남겨 작성 주체를 구분한다. `details: null`만으로 평가 이유 저장 요구를 충족한 것으로 보지 않는다. 별도 Judge의 이유는 독립적인 답변 판정이며 Ragas 점수의 산출 이유로 표시하지 않는다.
+
 ### 8.7 규칙 검사 결과
 
 ```text
@@ -809,6 +907,48 @@ notes
 
 비용을 알 수 없는 호출이 있으면 총비용은 `null`, `cost_complete`는 `false`로 두고, 확인된 비용 합계는 별도로 남긴다. 재평가 JSON에 복사한 과거 RAG 비용을 이번 평가에서 새로 발생한 비용에 합산하지 않는다. 비용·시간은 첫 평가의 통과 조건이 아니다.
 
+### 8.11 비용 단가와 집계 범위
+
+비용은 API usage와 공개 단가로 산출한 USD 금액이다. 세금·크레딧·계약 할인을 반영한 청구 금액과 구분한다. 아래는 2026-11-14에 확인한 표준 처리 요금이며, 실행 시 다시 확인하여 단가·확인 시각·출처·적용 조건을 manifest에 저장한다.
+
+| 모델 | 일반 입력 / 100만 토큰 | 캐시 입력 / 100만 토큰 | 출력 / 100만 토큰 |
+|---|---:|---:|---:|
+| `gpt-5.4-mini-2026-03-17` | $0.75 | $0.075 | $4.50 |
+| `gpt-5.4-2026-03-05` | $2.50 | $0.25 | $15.00 |
+| `text-embedding-3-small` | $0.02 | — | — |
+| `text-embedding-3-large` | $0.13 | — | — |
+
+GPT-5.4의 위 요금은 입력 272,000토큰 이하의 일반 텍스트 요청 기준이다. 처리 등급이나 요금 적용 조건이 다르면 위 단가를 그대로 적용하지 않는다. 요금 출처는 11절의 공식 모델 문서다.
+
+```text
+LLM 비용 = ((입력 토큰 - 캐시 입력 토큰) × 일반 입력 단가
+           + 캐시 입력 토큰 × 캐시 입력 단가
+           + 출력 토큰 × 출력 단가) / 1,000,000
+임베딩 비용 = 입력 토큰 × 입력 단가 / 1,000,000
+```
+
+- RAG 비용: 질문 임베딩 + 답변 생성.
+- Ragas 비용: 지표 내부의 모든 LLM 호출 + Answer Relevancy 임베딩.
+- 자동 평가 비용: Ragas + 별도 Judge. 외부 API를 쓰지 않는 규칙 검사의 API 비용은 0.
+- 사전 준비 비용: 문서 임베딩·인덱스 구축을 별도로 기록. 기존 인덱스의 과거 비용을 이번 실행에 다시 더하지 않음.
+- 출력 토큰에 포함된 추론 토큰은 다시 더하지 않음. 로컬 평가 캐시 미사용과 별개로 실제 서버 캐시 입력 사용량은 반영.
+
+원본 `usage`를 기준으로 하며 문자열 길이·최대 출력 토큰으로 비용을 추정하지 않는다. 호출 목적·문항·모델·요청 ID·시도 번호와 입력·캐시 입력·출력·추론 토큰을 기록한다. Ragas 내부 호출도 SDK 응답에서 수집해 연결한다. SDK 재시도의 각 요청과 실패 응답을 보존하고, JSON 검증 실패·출력 잘림에도 확보한 usage를 비용에 포함한다. 타임아웃 등으로 usage나 과금 여부를 확인하지 못한 경우 0원으로 처리하지 않는다. 같은 호출을 지표별 비용과 전체 비용에 중복 합산하지 않는다.
+
+### 8.12 시간 측정 구간
+
+| 항목 | 시작 → 종료 |
+|---|---|
+| `rag_elapsed_ms` | 문항 처리 시작 → 최종 답변 준비 또는 실행 오류 확정 |
+| 검색 시간 | 질문 임베딩 시작 → 검색 결과·컨텍스트 구성 완료 |
+| 생성 시간 | 생성 API 호출 직전 → 답변 수신·필요한 후처리 완료 |
+| `eval_elapsed_ms` | 문항 평가 입력 구성 시작 → 규칙·Ragas·Judge 결과와 상태 확정 |
+| 평가 세부 시간 | 각 Ragas 지표·규칙 검사·Judge의 시작 → 종료 |
+
+경과 시간은 `time.perf_counter()` 같은 단조 시계로 측정해 밀리초로 저장한다. 시작·종료 시각은 시간대를 포함한 ISO 8601로 기록한다. 네트워크 대기·SDK 재시도·재시도 대기는 포함한다. 프로그램 초기화·인덱스 로딩, 결과 파일 저장, 사람 검토 시간은 위 문항 처리 시간과 별도로 구분한다. 전체 경과 시간은 직접 측정하며 검색에 포함된 임베딩 시간을 다시 더하지 않는다. 첫 토큰 도착 시간은 측정 대상이 아니며 전체 답변 완료 시간을 사용한다.
+
+문항별 비용·시간과 전체 비용을 남기고, 정상 완료 문항의 시간은 평균·중앙값·최댓값과 표본 수를 함께 집계한다. 품질 실패와 실행 오류를 구분하고 오류 문항의 소요 시간도 보존한다. 평가 시간에는 실제 수행한 지표 수를 함께 표시한다.
+
 ## 9. 요약 CSV와 집계 JSON
 
 ### 9.1 `summary.csv`
@@ -845,19 +985,26 @@ notes
 - 규칙 검사 및 Judge 판정 집계.
 - 사람의 최종 통과·실패·미검토 개수.
 - 자동 평가와 사람 판정의 불일치 건수.
-- 비용 집계의 완전성과 소요 시간.
+- 비용 집계의 완전성·확인된 비용 합계와 소요 시간. 시간 통계와 적용 지표 수는 8.12절을 따른다.
 
 평균에는 정상 완료된 유효 점수만 포함한다. 유효 점수가 없으면 평균은 `null`이다. 적용 정책 때문에 제외된 문항과 실행 오류 때문에 빠진 문항의 수를 구분한다.
 
-## 10. 남은 결정과 구현 작업
+## 10. 구현과 테스트 범위
 
-### 10.1 실행 전 추가로 확정할 사항
+### 10.1 추가 설계 없이 확인할 여섯 가지
 
-- Ragas용 평가 LLM과 Answer Relevancy용 임베딩 모델.
-- 사용할 Ragas·SDK 버전과 실제 지표 클래스·호출 방식.
-- Judge 호출의 구체 설정. 추론 수준 `medium`은 앞서 제안했으며 실제 호출 설정에 명시할 값과 출력 토큰 한도 등을 구현 전에 고정한다.
-- 모델별 비용 단가, 적용 시점, 실제 시간 측정 구간과 사용량 수집 방법.
-- 필드 계약을 기계 검증 가능한 JSON Schema로 옮길 때의 세부 타입·필수 여부·오류 코드 등 구현 명세.
+현재 합의로 아래 요구사항을 수행할 수 있다. 오류 코드 목록·실행 ID 생성 방식·스키마 예외를 더 세분화하는 인터뷰는 진행하지 않는다. 구현에 필요한 세부는 이 문서의 원칙에 맞춰 최소한으로 정한다.
+
+| 요구사항 | 확인할 산출물 |
+|---|---|
+| 문서·청킹·검색 방식과 개수·생성 모델·프롬프트 기록 | RAG manifest와 실제 생성 요청 |
+| 기존 RAG에 평가 프레임워크 연결 | 저장된 RAG 결과를 읽어 평가하는 Ragas 연동 |
+| 검색·생성 지표 각각 하나 이상 및 입력 설명 | 4절의 검색 2개·생성 2개와 문항별 적용 범위 |
+| 질문 실행 후 검색 결과·실제 컨텍스트·답변 저장 | 10개 문항별 RAG JSON |
+| 문항별 점수·평가 이유 저장 | 평가 JSON의 점수·근거·상태·사유; 이유 미확보 시 8.6절에 따른 보완 |
+| 사람의 원문 대조와 질문 해결 여부 판정 | 전체 10문항의 사람 판정·이유·최종 결과 |
+
+범위 충족을 계획했다는 것과 구현·실행을 완료했다는 것은 구분한다. 실제 진행 순서는 [TODO.md](TODO.md)를 따른다.
 
 ### 10.2 구현할 작업
 
@@ -865,7 +1012,7 @@ notes
 2. `judge_v1.txt`와 JSON Schema 파일을 작성한다.
 3. 2주차 기준 코드를 보존한 채 3주차 실행·기록 코드를 준비한다.
 4. 검색에는 질문을, 생성에는 질문과 실제 검색 근거를 전달한다. 골든 정답·라벨·평가 기준을 분리하고 실제 입력과 원본 답변을 기록한다.
-5. 저장된 결과에 Ragas·규칙·Judge 평가를 수행하고 각 상태를 기록한다.
+5. 저장된 결과에 Ragas·규칙·Judge 평가를 수행하고 문항별 점수·평가 이유·각 상태를 기록한다.
 6. 사람이 10문항을 모두 검토하고 이력을 추가한다.
 7. 요약 JSON·CSV를 생성하고 실패 또는 통과 판단의 근거를 분석한다.
 8. 평가 프레임워크·대안 조사, 지표의 한계, 실행 방법과 결과를 README 및 5분 발표 자료에 정리한다.
@@ -883,5 +1030,19 @@ notes
 - [Ragas Faithfulness](https://docs.ragas.io/en/stable/concepts/metrics/available_metrics/faithfulness/)
 - [Ragas Answer Relevancy](https://docs.ragas.io/en/stable/concepts/metrics/available_metrics/answer_relevance/)
 - [OpenAI GPT-5.4 모델 명세](https://developers.openai.com/api/docs/models/gpt-5.4)
+- [OpenAI GPT-5.4 mini 모델 명세](https://developers.openai.com/api/docs/models/gpt-5.4-mini)
+- [OpenAI text-embedding-3-small](https://developers.openai.com/api/docs/models/text-embedding-3-small)
+- [OpenAI text-embedding-3-large](https://developers.openai.com/api/docs/models/text-embedding-3-large)
+- [GPT-5.4 파라미터 호환성](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.4)
+- [OpenAI 프롬프트 캐시](https://developers.openai.com/api/docs/guides/prompt-caching)
+- [OpenAI usage 기반 비용 계산 예제](https://developers.openai.com/cookbook/examples/agent_optimization/optimizing_agents_for_cost_and_quality)
+- [Ragas 0.4.3 LLM 연동 소스](https://github.com/vibrantlabsai/ragas/blob/v0.4.3/src/ragas/llms/base.py)
+- [OpenAI SDK 2.54.0 의존성](https://github.com/openai/openai-python/blob/v2.54.0/pyproject.toml)
+- [OpenAI SDK 3.51.0 의존성](https://github.com/openai/openai-python/blob/v3.51.0/pyproject.toml)
+- [Instructor 1.17.0 의존성](https://github.com/567-labs/instructor/blob/v1.17.0/pyproject.toml)
+- [Instructor 1.17.0 재시도 구현](https://github.com/567-labs/instructor/blob/v1.17.0/instructor/v2/core/retry.py)
+- [JSON Schema Draft 2020-12](https://json-schema.org/draft/2020-12/)
+- [JSON Schema 필수 속성](https://json-schema.org/understanding-json-schema/reference/object)
+- [JSON Schema null](https://json-schema.org/understanding-json-schema/reference/null)
 - [OpenAI 평가 가이드](https://developers.openai.com/api/docs/guides/evaluation-best-practices)
 - [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses)
