@@ -3,9 +3,9 @@
 작성일: 2026-11-11
 최종 갱신: 2026-11-14
 
-상태: 설계 확정 및 문서화. 추가 설계 논의를 마치고 구현·테스트로 진행한다. 패키지 설치·호환성 검증·평가 코드 구현·실제 평가 실행은 아직 완료하지 않았다.
+상태: 설계에 따라 골든·Pydantic 모델·실행·평가·기록 코드를 준비했다. 고정 패키지 설치, 기존 색인 검증, 모의 HTTP 기반 지표 연결을 확인했다. 실제 응답 생성·평가 API 호출·사람 검토는 아직 실행하지 않았으며, 최종 로컬 검증 상태는 [TODO.md](TODO.md)에 기록한다.
 
-이 문서는 [전체 계획](PLAN.md)에 이어 대화에서 확정한 평가 질문 10개, 골든 데이터, Ragas 지표, 규칙 검사, LLM Judge, 파일 구조와 JSON·CSV 필드 계약을 기록한다. 아래 예시는 실제 실행 결과가 아니다. `eval/`과 `output/`의 파일은 향후 구현할 산출물이다.
+이 문서는 [전체 계획](PLAN.md)에 이어 대화에서 확정한 평가 질문 10개, 골든 데이터, Ragas 지표, 규칙 검사, LLM Judge, 파일 구조와 JSON·CSV 필드 계약을 기록한다. 아래 예시는 실제 실행 결과가 아니다. `eval/`에는 실행 코드를 준비했으며, 정식 `output/` 결과는 사용자가 실행한 뒤 생성한다.
 
 바로가기:
 
@@ -72,7 +72,9 @@
 | OpenAI Python SDK | `openai==2.54.0` |
 | Instructor | `instructor==1.17.0` |
 
-버전 선택은 공식 자료와 소스 검토를 바탕으로 한 결정이며, 설치·실제 API 호출 호환성 검증을 마쳤다는 뜻은 아니다. 검토한 SDK `3.51.0`의 `jiter>=0.16` 조건과 Instructor `1.17.0`의 `jiter<0.15` 조건이 충돌하여, 해당 의존성 범위가 겹치는 SDK `2.54.0`을 선택했다. 구현 시 설치와 연동을 확인하고 나머지 의존성도 lock 파일로 고정하며 실제 Python·패키지 버전을 기록한다.
+버전 선택은 공식 자료와 소스 검토를 바탕으로 했다. 검토한 SDK `3.51.0`의 `jiter>=0.16` 조건과 Instructor `1.17.0`의 `jiter<0.15` 조건이 충돌하여, 해당 의존성 범위가 겹치는 SDK `2.54.0`을 선택했다. Python 3.13.2 환경에서 설치·모의 연동을 확인하고 나머지 의존성도 `uv.lock`으로 고정했다. 실제 API 호출 호환성과 모델 접근 권한은 정식 실행에서 확인한다.
+
+설치 과정에서 `langchain-community==0.4.2`가 Ragas 0.4.3이 import하는 VertexAI 모듈을 제거한 문제를 확인했다. `langchain-community==0.4.1`로 고정하여 import와 모의 지표 실행을 검증했다. 기존 색인과 같은 `chromadb==1.5.9`를 사용하며 선택한 Ragas·OpenAI·Instructor 버전은 유지한다.
 
 Ragas는 `ragas.metrics.collections`의 `ContextPrecision`, `ContextRecall`, `Faithfulness`, `AnswerRelevancy`를 사용한다. OpenAI 비동기 클라이언트와 Instructor 연동을 사용하고, 평가 임베딩에는 선택한 모델과 차원을 명시한다.
 
@@ -596,28 +598,35 @@ fail로 기록하고 판단하기 어려운 부분도 reason에 설명하라.
 
 ## 7. 확정한 파일 구조와 실행 식별
 
-아래는 구현할 구조다. 기준 폴더는 `week-03/DChanHong/`다.
+기준 폴더는 `week-03/DChanHong/`다. 아래의 실행 코드·데이터를 준비했으며, `output/`의 정식 결과는 사용자 실행 시 생성한다. Pydantic 모델을 스키마의 단일 원본으로 사용한다.
 
 ```text
 week-03/DChanHong/
+├── pyproject.toml
+├── uv.lock
+├── .env.example
 ├── docs/
 │   ├── 00-plan/
 │   │   ├── PLAN.md
-│   │   └── EVALUATION_SPEC.md
+│   │   ├── EVALUATION_SPEC.md
+│   │   └── TODO.md
 │   └── 01-document/
 │       └── 원문 PDF
 ├── eval/
+│   ├── README.md
+│   ├── schemas.py
+│   ├── __main__.py
+│   ├── config.py / common.py / api.py
+│   ├── index.py / rag.py
+│   ├── evaluate.py / metrics.py / rules.py / judge.py / report.py
 │   ├── datasets/
 │   │   └── golden_v1.json
-│   ├── prompts/
-│   │   └── judge_v1.txt
-│   └── schemas/
-│       ├── golden_dataset_v1.json
-│       ├── rag_manifest_v1.json
-│       ├── rag_record_v1.json
-│       ├── evaluation_manifest_v1.json
-│       ├── evaluation_record_v1.json
-│       └── judge_result_v1.json
+│   ├── data/
+│   │   └── chunks.json / sections.json / baseline.json
+│   └── prompts/
+│       └── generation_v1.txt / judge_v1.txt
+├── tests/
+├── chroma_db/                       # 기존 색인 복사본, Git 제외
 └── output/
     ├── rag_runs/
     │   └── <rag_run_id>/
@@ -641,14 +650,15 @@ week-03/DChanHong/
 - 사람 판정은 해당 평가 실행의 문항별 검토 이력에 추가한다.
 - 문항별 평가 JSON은 검토에 필요한 골든·RAG 원본 복사본을 포함한다. 원본 경로·해시로 연결하여 동일한 입력인지 확인한다.
 - `summary.csv`와 `summary.json`은 상세 JSON에서 재생성할 수 있는 파생 파일이다.
+- 여섯 JSON 계약은 `eval/schemas.py`의 `GoldenDataset`, `RagManifest`, `RagRecord`, `EvaluationManifest`, `EvaluationRecord`, `JudgeResult`로 검증한다. 필요한 API 출력 JSON Schema는 `model_json_schema()`로 생성하며 별도 수작업 스키마 파일을 유지하지 않는다.
 
 ## 8. JSON 필드 계약
 
-아래는 확정한 필드·자료형·의미다. 실제 JSON Schema 파일과 데이터 파일은 구현 단계에서 작성한다. 오류 코드·실행 ID 생성 방식·규칙 종류별 값 구조 등은 기존 의미를 유지하는 최소 구현으로 정하며, 추가 설계 인터뷰의 선행 조건으로 두지 않는다.
+아래는 확정한 필드·자료형·의미다. `eval/schemas.py`의 Pydantic 모델이 저장 파일을 검증한다. 오류 코드·실행 ID 생성 방식·규칙 종류별 값 구조 등은 기존 의미를 유지하는 최소 구현으로 정하며, 추가 설계 인터뷰의 선행 조건으로 두지 않는다.
 
 ### 8.0 공통 자료형·필수 필드·null 원칙
 
-파일 검증에는 JSON Schema Draft 2020-12를 사용한다. 우리가 정의한 고정 구조는 선언한 키를 모두 `required`로 지정하고 `additionalProperties: false`로 닫는다. 키의 존재와 값의 `null` 허용은 별개다. Judge 출력의 기존 키·enum은 유지하며 파일 검증용 조건을 API 출력에 임의로 추가하지 않는다.
+파일 검증에는 Pydantic의 `model_validate_json()`을 사용한다. 고정 구조는 기본값 없이 모든 필드를 필수로 선언하고 `ConfigDict(extra="forbid")`로 추가 키를 거부한다. 필요한 JSON Schema는 모델에서 생성하며 필수 키와 `additionalProperties: false`를 유지한다. 키의 존재와 값의 `null` 허용은 별개다. Judge 출력의 기존 키·enum은 유지하며 저장 파일용 검증 조건을 Judge API 출력에 임의로 추가하지 않는다.
 
 | 대상 | 자료형·제약 |
 |---|---|
@@ -1009,7 +1019,7 @@ LLM 비용 = ((입력 토큰 - 캐시 입력 토큰) × 일반 입력 단가
 ### 10.2 구현할 작업
 
 1. 이 문서의 Q01~Q10을 `golden_v1.json`으로 옮기고 C/G/규칙 식별자, 원문 발췌, 부재 검토 기록을 채운다.
-2. `judge_v1.txt`와 JSON Schema 파일을 작성한다.
+2. `judge_v1.txt`와 `eval/schemas.py`의 Pydantic 모델을 작성한다. API 출력 JSON Schema는 모델로부터 생성한다.
 3. 2주차 기준 코드를 보존한 채 3주차 실행·기록 코드를 준비한다.
 4. 검색에는 질문을, 생성에는 질문과 실제 검색 근거를 전달한다. 골든 정답·라벨·평가 기준을 분리하고 실제 입력과 원본 답변을 기록한다.
 5. 저장된 결과에 Ragas·규칙·Judge 평가를 수행하고 문항별 점수·평가 이유·각 상태를 기록한다.
