@@ -6,6 +6,7 @@
 - 2주차 과제와 발표 안내: [https://github.com/bjc1102/ai-agent-repo2/tree/main/week-02](https://github.com/bjc1102/ai-agent-repo2/tree/main/week-02)
 - [3주차 RAG 평가 파이프라인 구성 과제](https://github.com/bjc1102/ai-agent-repo2/tree/main/week-03)
 - [4주차 Advanced RAG 개선과 평가 비교 과제](https://github.com/bjc1102/ai-agent-repo2/tree/main/week-04)
+- [5주차 공개 API 기반 AI Agent 구현 과제](https://github.com/bjc1102/ai-agent-repo2/tree/main/week-05)
 - GitHub Fork와 PR 제출 가이드: [https://github.com/bjc1102/ai-agent-repo2/blob/main/docs/submission-guide.md](https://github.com/bjc1102/ai-agent-repo2/blob/main/docs/submission-guide.md)
 
 과제는 각 주차에 안내된 `week-XX/{github-id}/` 폴더에 제출해주세요. API 키, 개인정보, 비공개 업무 자료는 올리지 마세요.
