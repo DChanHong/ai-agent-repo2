@@ -1,4 +1,5 @@
 from functools import cache
+from threading import Lock
 
 import chromadb
 from agents import function_tool
@@ -14,8 +15,17 @@ from ipo_agent.schemas import (
 )
 
 
-@cache
+_collection_lock = Lock()
+
+
 def get_collection():
+    # SDK가 첫 공시 검색 여러 건을 동시에 실행할 수 있습니다.
+    with _collection_lock:
+        return _open_collection()
+
+
+@cache
+def _open_collection():
     client = chromadb.PersistentClient(path=str(DB_DIR))
     return client.get_collection(
         name=COLLECTION_NAME,
