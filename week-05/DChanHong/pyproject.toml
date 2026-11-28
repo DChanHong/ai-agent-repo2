@@ -4,6 +4,8 @@ version = "0.1.0"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "chromadb>=1.5.9",
+    "exchange-calendars>=4.13.3",
+    "httpx>=0.29.0",
     "openai>=3.60.0",
     "openai-agents>=0.26.0",
     "pydantic>=2,<3",

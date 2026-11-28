@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, StringConstraints, computed_field
@@ -59,3 +59,32 @@ class IpoFirstDayPerformance(Schema):
     def open_to_close_pct(self) -> float:
         """상장일 시가 대비 종가 등락률입니다."""
         return round((self.close_price / self.open_price - 1) * 100, 2)
+
+
+class FilingReference(Schema):
+    receipt_no: ReceiptNo
+    report_name: str
+    filed_on: date
+
+
+class SubscriptionCandidate(Schema):
+    company: str
+    stock_code: str
+    opens_on: date
+    closes_on: date
+    filing: FilingReference | None
+
+
+class SubscriptionCandidates(Schema):
+    start: date
+    end: date
+    candidates: list[SubscriptionCandidate]
+    analysis_companies: list[str]
+    issues: list[str]
+
+
+class RecentIpoPerformance(Schema):
+    as_of: datetime
+    calendar_from: date
+    items: list[IpoFirstDayPerformance]
+    issues: list[str]
