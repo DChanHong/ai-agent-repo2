@@ -1,6 +1,7 @@
+from datetime import date
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, StringConstraints, computed_field
 
 
 # SDK가 만드는 입력 스키마에서도 같은 제약을 사용합니다.
@@ -36,3 +37,25 @@ class EvidenceNotFound(Schema):
 class FilingEvidenceResult(Schema):
     receipt_no: ReceiptNo
     result: EvidenceFound | EvidenceNotFound
+
+
+class IpoFirstDayPerformance(Schema):
+    company: str
+    stock_code: str
+    market: Literal["KOSPI", "KOSDAQ"]
+    listing_date: date
+    offer_price: Annotated[int, Field(gt=0)]
+    open_price: Annotated[int, Field(gt=0)]
+    close_price: Annotated[int, Field(gt=0)]
+
+    @computed_field
+    @property
+    def offer_to_open_pct(self) -> float:
+        """공모가 대비 상장일 시가 등락률입니다."""
+        return round((self.open_price / self.offer_price - 1) * 100, 2)
+
+    @computed_field
+    @property
+    def open_to_close_pct(self) -> float:
+        """상장일 시가 대비 종가 등락률입니다."""
+        return round((self.close_price / self.open_price - 1) * 100, 2)
