@@ -1,8 +1,30 @@
 from agents import Agent
+from pydantic import AwareDatetime
 
+from ipo_agent.schemas import EvidenceFound, FilingEvidenceResult, Schema, SubscriptionCandidates
+from ipo_agent.subscription_policy import (
+    EqualAssessment, FilingEvidence, ProportionalTerms, apply_subscription_policy,
+)
 from ipo_agent.tools.filing_evidence import read_filing_evidence
-from ipo_agent.tools.recent_ipo_performance import get_recent_ipo_performance
+from ipo_agent.tools.recent_ipo_performance import KST, get_recent_ipo_performance
 from ipo_agent.tools.subscription_candidates import find_subscription_candidates
+
+
+class CompanyAssessment(Schema):
+    company: str
+    as_of: AwareDatetime
+    equal: EqualAssessment
+    terms: ProportionalTerms | None
+    terms_evidence: list[FilingEvidence]
+
+
+class PolicyReport(Schema):
+    include_schedule: bool
+    companies: list[CompanyAssessment]
+
+
+class AgentAnswer(Schema):
+    answer: str | PolicyReport
 
 
 subscription_agent = Agent(
@@ -22,7 +44,78 @@ subscription_agent = Agent(
         "표 제목과 합계가 서로 다른 쪽에 있으면 각각의 쪽 번호를 구분합니다. "
         "계산한 값은 원문 수치와 계산식을 함께 제시합니다. "
         "근거가 부족하면 빠진 항목을 구체화해 한 번 더 조회합니다. "
-        "그래도 확인할 수 없으면 해당 항목과 이유를 밝히고 종료합니다."
+        "조회·일정·공시 수치 질문은 answer에 일반 문자열로 답합니다. "
+        "참여 여부, 균등·비례, 청약 추천 질문은 반드시 PolicyReport로 답합니다. "
+        "기간 요청은 일정 전체에서 마감순 최대 세 곳을 분석합니다. 특정 종목을 지정하면 그 종목만 분석합니다. "
+        "기간 전체 요청일 때만 include_schedule=true입니다. 종목과 접수번호가 주어지면 공시부터 조회합니다. "
+        "기관 수요, 기존 주주 유통 물량, 청약 비용은 각각 해당 항목에 맞는 공시 검색어를 사용합니다. "
+        "부족한 항목만 한 번 더 조회한 다음 해당 단계를 마칩니다. "
+        "분석 기준 시점(as_of)을 명시합니다. 과거 청약에 시각 지정이 없으면 각 청약 마감일 00:00 한국 시간을 사용합니다. "
+        "기준 시점 이후 공개된 배정 결과나 상장 시세를 청약 판단에 사용하지 않습니다. "
+        "기관 제시가격 분포와 확약 신청, 확정 공모가, 기존 주주의 유통 물량과 취득가, "
+        "최소 수량과 수수료를 근거로 균등 참여 여부를 먼저 판단합니다. 가격이나 기존 주주 물량만으로 "
+        "패스 근거가 충분하면 청약 안 함입니다. 확인이 부족하면 판단 보류로 남기고 다음 종목을 진행합니다. "
+        "equal.reason에는 판단을 가른 수치와 이유를 쓰고, evidence에는 도구가 반환한 접수번호, PDF page, "
+        "원문에서 그대로 복사한 짧은 연속 인용문(text)을 넣습니다. 표의 경우 셀 하나의 수치도 가능합니다. "
+        "균등 참여 시 비례 손익 계산에 필요한 terms만 채웁니다. 확인하지 못한 값은 null입니다. "
+        "terms_evidence에도 실제 조회한 조건의 원문을 인용합니다. 증거금률은 50%면 0.5입니다. "
+        "배정 전에는 청약단위에 맞는 신청 수량과 이를 뒷받침할 근거가 있을 때만 "
+        "비례 1주 추가 배정 가정을 사용합니다. 균등·비례의 최종 손익 판정은 실행 프로그램에서 계산합니다."
     ),
     tools=[find_subscription_candidates, read_filing_evidence, get_recent_ipo_performance],
+    output_type=AgentAnswer,
 )
+
+
+def format_answer(answer: AgentAnswer, tool_outputs: list) -> str:
+    if isinstance(answer.answer, str):
+        return answer.answer
+
+    pages = {}
+    lines = []
+    for output in tool_outputs:
+        if isinstance(output, SubscriptionCandidates) and answer.answer.include_schedule:
+            lines.append(f"청약 일정 ({output.start} ~ {output.end})")
+            lines.extend(f"- {c.company}: {c.opens_on} ~ {c.closes_on}" for c in output.candidates)
+            lines.extend(output.issues)
+        elif isinstance(output, FilingEvidenceResult) and isinstance(output.result, EvidenceFound):
+            for page in output.result.evidence:
+                key = (output.result.company, output.receipt_no, page.page)
+                pages.setdefault(key, []).append("".join(page.text.split()))
+
+    for item in answer.answer.companies:
+        def verified(ref: FilingEvidence) -> bool:
+            texts = pages.get((item.company, ref.receipt_no, ref.page), [])
+            return (ref.receipt_no[:8] <= item.as_of.astimezone(KST).strftime("%Y%m%d")
+                    and any("".join(ref.text.split()) in text for text in texts))
+
+        equal = item.equal
+        verified_evidence = [ref for ref in equal.evidence if verified(ref)]
+        if len(verified_evidence) != len(equal.evidence):
+            reason = "일부 공시 인용을 기준 시점과 원문에서 확인할 수 없습니다."
+            if equal.decision == "판단 보류":
+                reason = f"{equal.reason} {reason}"
+            equal = EqualAssessment(decision="판단 보류", reason=reason, evidence=verified_evidence)
+        terms = item.terms
+        if not item.terms_evidence or not all(verified(ref) for ref in item.terms_evidence):
+            terms = None
+        if terms and terms.allocation and terms.allocation.basis == "실제 배정":
+            terms = terms.model_copy(update={"allocation": None})
+        decision = apply_subscription_policy(equal, terms)
+        lines.extend(("", f"{item.company} | {decision.decision} | 기준 {item.as_of.isoformat()}",
+                      f"균등 판단: {decision.equal.decision} ({decision.equal.reason})"))
+        for ref in decision.equal.evidence + (item.terms_evidence if terms else []):
+            lines.append(f"- PDF {ref.page}쪽: {ref.text} (https://dart.fss.or.kr/dsaf001/main.do?rcpNo={ref.receipt_no})")
+        if decision.unconfirmed and decision.unconfirmed != [decision.equal.reason]:
+            lines.append("확인하지 못한 조건: " + ", ".join(decision.unconfirmed))
+        calc = decision.calculation
+        if calc:
+            lines.append(f"{calc.allocation.basis}: {calc.allocation.reason}")
+            lines.append(f"추가 증거금 {calc.extra_deposit:,.2f}원, {calc.calendar_days}일 자금 비용 {calc.funding_cost:,.2f}원 ({calc.cost_note})")
+            for row in calc.scenarios:
+                lines.append(f"- {row.rise_pct:+d}% 매도가 {row.sale_price:,.2f}원: 추가 손익 {row.extra_profit:+,.2f}원")
+            if calc.break_even_sale_price is not None:
+                lines.append(f"주당 손익분기 매도가: {calc.break_even_sale_price:,.2f}원")
+    if not answer.answer.companies:
+        lines.append("판단할 종목을 확인하지 못했습니다.")
+    return "\n".join(lines).strip()

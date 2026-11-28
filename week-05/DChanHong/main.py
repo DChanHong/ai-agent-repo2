@@ -2,7 +2,7 @@ import argparse
 
 from agents import MaxTurnsExceeded, Runner
 
-from ipo_agent.agents.subscription import subscription_agent
+from ipo_agent.agents.subscription import format_answer, subscription_agent
 
 
 def main():
@@ -20,7 +20,8 @@ def main():
         if item.type == "tool_call_item":
             print(f"[도구 호출] {item.raw_item.name} {item.raw_item.arguments}")
 
-    print(result.final_output)
+    outputs = [item.output for item in result.new_items if item.type == "tool_call_output_item"]
+    print(format_answer(result.final_output, outputs))
 
 
 if __name__ == "__main__":
