@@ -11,7 +11,7 @@ from agents import MaxTurnsExceeded
 from agents.tool_context import ToolContext
 
 from main import run_request
-from ipo_agent.agents.subscription import AgentAnswer, AssessmentPlan, CompanyAssessment
+from ipo_agent.agents.subscription import AgentAnswer, AssessmentPlan, CompanyAssessment, LockupRateAnswer
 from ipo_agent.schemas import FilingEvidenceResult, SubscriptionCandidates
 from ipo_agent.tools import filing_evidence
 from ipo_agent.tools.recent_ipo_performance import KST, last_closed_day, recent_performance
@@ -40,6 +40,19 @@ class TestIpoTools(unittest.IsolatedAsyncioTestCase):
             result = await tool.on_invoke_tool(ctx, args)
         self.assertEqual(len(result.candidates), 4)
         self.assertEqual(result.analysis_companies, ["다기업", "가기업", "나기업"])
+        self.assertIsNone(result.candidates[0].filing)
+
+    async def test_first_closing_only_keeps_alphabetical_winner_even_without_pdf(self):
+        rows = [offer("나기업", "000002", "2026/11/02 ~ 2026/11/03"),
+                offer("가기업", "000001", "2026/11/02 ~ 2026/11/03")]
+        tool = find_subscription_candidates
+        args = json.dumps({"start": "2026-11-02", "end": "2026-11-06", "first_closing_only": True})
+        ctx = ToolContext(None, tool_name=tool.name, tool_call_id="first", tool_arguments=args)
+        with patch("ipo_agent.tools.subscription_candidates.kis_client") as client:
+            client.return_value.offers.return_value = rows
+            result = await tool.on_invoke_tool(ctx, args)
+        self.assertTrue(result.first_closing_only)
+        self.assertEqual([c.company for c in result.candidates], ["가기업"])
         self.assertIsNone(result.candidates[0].filing)
 
     def test_parallel_first_filing_queries_open_one_collection(self):
@@ -148,3 +161,63 @@ class TestRequestTurnLimit(unittest.TestCase):
         with patch("main.Runner.run_sync", return_value=result) as run:
             self.assertEqual(run_request("일정만 조회"), "조회한 일정입니다.")
         self.assertEqual(run.call_count, 1)
+
+    def test_quantity_lockup_rate_uses_verified_total_shares(self):
+        receipt = "20261030000113"
+        answer = LockupRateAnswer(receipt_no=receipt, page=33, uncommitted_quantity=1067624493,
+                                  total_quantity=1280209493)
+        rows = [
+            ("6개월 확약", 14459500), ("3개월 확약", 30407300), ("1개월 확약", 28818000),
+            ("15일 확약", 138900200), ("미확약", 1067624493), ("계", 1280209493),
+        ]
+        body = ["외국 기관투자자   합계", "건수 수량 신청가격 " * 3]
+        body.extend(f"{label} 0 0 0 - - - 1 {qty:,} 26,500" for label, qty in rows)
+        filing = FilingEvidenceResult.model_validate({
+            "receipt_no": receipt, "result": {
+                "status": "found", "company": "동원파츠",
+                "source_url": f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={receipt}",
+                "evidence": [{"page": 32, "text": "의무보유확약기간별 수요예측 참여내역"},
+                             {"page": 33, "text": "\n".join(body)}],
+            },
+        })
+        for variant, expected in [({}, "16.61%"), ({"total_quantity": 2236}, "계산 보류"),
+                                  ({"uncommitted_quantity": 1907}, "계산 보류"),
+                                  ({"page": 32}, "계산 보류"), ({"receipt_no": "20261030000467"}, "계산 보류")]:
+            with self.subTest(variant=variant):
+                response = AgentAnswer(answer=answer.model_copy(update=variant))
+                result = self.run_result(response, 3, filing)
+                with patch("main.Runner.run_sync", return_value=result):
+                    report = run_request("수량 기준 의무보유확약 신청률과 PDF 쪽을 알려 주세요")
+                self.assertIn(expected, report)
+                if not variant:
+                    self.assertIn("212,585,000주", report)
+                    self.assertIn("PDF 33쪽", report)
+
+    def test_wrong_receipt_cannot_finish_first_closing_request(self):
+        first, second = "20261030000113", "20261030000396"
+        schedule = SubscriptionCandidates.model_validate({
+            "start": "2026-11-02", "end": "2026-11-06", "issues": [],
+            "analysis_companies": ["동원파츠", "바로팜"], "candidates": [
+                {"company": company, "stock_code": company, "opens_on": "2026-11-02", "closes_on": "2026-11-03",
+                 "filing": {"receipt_no": receipt, "filed_on": "2026-10-30", "report_name": "공시"}}
+                for company, receipt in [("동원파츠", first), ("바로팜", second)]
+            ],
+        })
+        question = "마감이 가장 빠른 종목의 확약 신청률을 구해줘. 동률이면 가나다순."
+        wrong = LockupRateAnswer(receipt_no=second, page=33, uncommitted_quantity=10, total_quantity=11)
+        wrong_run = self.run_result(AgentAnswer(answer=wrong), 3, schedule)
+        for receipt, expected in [(first, "검증 완료"), (second, "계산 보류")]:
+            with self.subTest(receipt=receipt):
+                answer = wrong.model_copy(update={"receipt_no": receipt})
+                correction = self.run_result(AgentAnswer(answer=answer), 2)
+                with patch("main.Runner.run_sync", side_effect=[wrong_run, correction]) as run, \
+                     patch("main.format_lockup_rate", return_value="검증 완료") as render:
+                    report = run_request(question)
+                self.assertIn(expected, report)
+                self.assertEqual(render.call_count, int(receipt == first))
+                self.assertEqual(run.call_args.kwargs["max_turns"], 9)
+                self.assertIn(first, run.call_args.args[1])
+
+        with patch("main.Runner.run_sync", return_value=wrong_run) as run:
+            self.assertIn("목표 미달성", run_request(question, max_turns=3))
+            self.assertEqual(run.call_count, 1)

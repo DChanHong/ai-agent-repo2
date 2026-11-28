@@ -1,7 +1,10 @@
-from agents import Agent
-from pydantic import AwareDatetime
+import re
+from decimal import Decimal, ROUND_HALF_UP
 
-from ipo_agent.schemas import EvidenceFound, FilingEvidenceResult, Schema, SubscriptionCandidates
+from agents import Agent
+from pydantic import AwareDatetime, NonNegativeInt, PositiveInt
+
+from ipo_agent.schemas import EvidenceFound, FilingEvidenceResult, ReceiptNo, Schema, SubscriptionCandidates
 from ipo_agent.subscription_policy import (
     EqualAssessment, FilingEvidence, ProportionalTerms, apply_subscription_policy,
 )
@@ -23,8 +26,15 @@ class AssessmentPlan(Schema):
     companies: list[str]
 
 
+class LockupRateAnswer(Schema):
+    receipt_no: ReceiptNo
+    page: PositiveInt
+    uncommitted_quantity: NonNegativeInt
+    total_quantity: PositiveInt
+
+
 class AgentAnswer(Schema):
-    answer: str | AssessmentPlan
+    answer: str | LockupRateAnswer | AssessmentPlan
 
 
 subscription_agent = Agent(
@@ -32,6 +42,10 @@ subscription_agent = Agent(
     model="gpt-6-luna",
     instructions=(
         "기간별 청약 일정과 후보는 find_subscription_candidates로 조회합니다. "
+        "마감이 가장 빠른 한 종목(동률이면 가나다순) 요청은 first_closing_only=true로 조회합니다. "
+        "반환된 한 후보의 filing.receipt_no를 그대로 후속 공시 조회에 사용합니다. "
+        "공시가 없으면 해당 종목의 PDF 미확보로 답합니다. "
+        "전체 일정이나 특정 종목을 요청하면 first_closing_only=false로 조회합니다. "
         "일정만 요청하면 전체 일정과 상세 분석 대상만 제시하고 종료합니다. "
         "공시가 없는 종목은 PDF 미확보로 표시합니다. "
         "직전 공모주 시장 흐름은 get_recent_ipo_performance에 기준 일시를 전달합니다. "
@@ -47,7 +61,11 @@ subscription_agent = Agent(
         "기준 시점이 있는 사실 조회는 당시 공개된 자료에서 확인한 조건과 확인하지 못한 조건을 구분합니다. "
         "청약 마감 전의 실제 배정 주수를 묻는 경우 확정 공모가 등 확인한 사실을 제시하고, "
         "실제 배정 결과가 그 시점에 확정되지 않은 이유를 설명합니다. "
-        "단순 사실 조회는 배정이나 비례라는 단어가 있어도 answer에 일반 문자열로 답합니다. "
+        "한 종목의 수량 기준 의무보유확약 신청률을 묻는 요청에는 공시 도구로 '확약기간별 수요예측 참여내역'을 조회합니다. "
+        "전체 기관 합계 열의 미확약 수량과 전체 신청 수량을 원문에서 찾으면 LockupRateAnswer에 "
+        "접수번호, 그 두 행의 PDF 쪽 번호, 두 수량(주)을 반환합니다. 백분율은 프로그램이 계산합니다. "
+        "수량을 확인하지 못하면 누락 항목을 밝히고 계산을 보류합니다. "
+        "그 밖의 단순 사실 조회는 배정이나 비례라는 단어가 있어도 answer에 일반 문자열로 답합니다. "
         "참여 여부, 균등·비례, 청약 추천 요청에는 AssessmentPlan을 반환합니다. "
         "기간 전체 요청은 먼저 일정을 조회하고 include_schedule=true로 설정합니다. "
         "특정 종목 요청은 include_schedule=false로 설정하고 사용자가 지정한 종목명을 적습니다. "
@@ -80,6 +98,73 @@ assessment_agent = subscription_agent.clone(
         "비례 1주 추가 배정 가정을 사용합니다. 균등·비례의 최종 손익 판정은 실행 프로그램에서 계산합니다."
     ),
 )
+
+
+def _lockup_quantities_match(answer: LockupRateAnswer, filing: EvidenceFound) -> bool:
+    pages = {page.page: page.text for page in filing.evidence}
+    # 표 제목은 합계 행과 같은 쪽 또는 바로 앞쪽에 있습니다.
+    table = pages.get(answer.page - 1, "") + "\n" + pages.get(answer.page, "")
+    _, title, table = table.rpartition("확약기간별 수요예측 참여내역")
+    if not title or answer.page not in pages:
+        return False
+    # 합계 열이 붙은 외국 기관 표에서 마지막 세 칸은 건수, 수량, 신청가격입니다.
+    _, header, totals = table.partition("외국 기관투자자")
+    if not header or not re.search(r"합\s*계", totals):
+        return False
+    table_body = re.split(r"(?m)^\s*주1\)|^\s*\(라\)", totals, maxsplit=1)[0]
+    rows = []
+    for line in table_body.splitlines():
+        cells = line.split()
+        # 증권신고서 양식은 외국 기관 두 그룹과 전체 합계를 각각 세 칸에 표시합니다.
+        if len(cells) < 9 or not all(re.fullmatch(r"(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+|-)", c) for c in cells[-9:]):
+            continue
+        rows.append((line, "".join(cells[:-9]), cells[-2]))
+    # 6개월, 3개월, 1개월, 15일, 미확약, 계 순서이며, 일부 PDF에는 행 이름이 생략됩니다.
+    expected_labels = ("6개월확약", "3개월확약", "1개월확약", "15일확약", "미확약", "계")
+    if len(rows) != len(expected_labels):
+        return False
+    for (_, label, _), expected in zip(rows, expected_labels):
+        if label and label.removeprefix("합") != expected:
+            return False
+    values = [0 if cell == "-" else int(cell.replace(",", "")) for _, _, cell in rows]
+    return (
+        values[-2:] == [answer.uncommitted_quantity, answer.total_quantity]
+        and sum(values[:-1]) == answer.total_quantity
+        and all(line in pages[answer.page] for line, _, _ in rows[-2:])
+    )
+
+
+def format_lockup_rate(answer: LockupRateAnswer, outputs: list) -> str:
+    """전체 기관 합계 열의 수량을 대조한 뒤 (전체 - 미확약) / 전체를 계산합니다."""
+    for output in outputs:
+        if not isinstance(output, FilingEvidenceResult) or output.receipt_no != answer.receipt_no:
+            continue
+        filing = output.result
+        if not isinstance(filing, EvidenceFound) or not _lockup_quantities_match(answer, filing):
+            continue
+        committed = answer.total_quantity - answer.uncommitted_quantity
+        percent = (Decimal(committed) * 100 / answer.total_quantity).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        lines = [f"{filing.company}의 수량 기준 의무보유확약 신청률은 {percent:.2f}%입니다."]
+        for schedule in outputs:
+            if isinstance(schedule, SubscriptionCandidates):
+                selected = next((c for c in schedule.candidates
+                                 if c.filing and c.filing.receipt_no == answer.receipt_no), None)
+                if selected:
+                    if schedule.first_closing_only:
+                        lines.append(f"최초 마감일 {selected.closes_on}, 동률 시 회사명 가나다순으로 선정했습니다.")
+                        break
+                    tied = [c.company for c in schedule.candidates if c.closes_on == selected.closes_on]
+                    lines.append(f"{selected.closes_on} 마감 종목(가나다순): {', '.join(sorted(tied))}")
+                    break
+        lines.extend([
+            f"확약 신청 수량: 전체 {answer.total_quantity:,}주 − 미확약 {answer.uncommitted_quantity:,}주 = {committed:,}주",
+            f"신청률: {committed:,} ÷ {answer.total_quantity:,} × 100 = {percent:.2f}% (소수점 둘째 자리까지 표시)",
+            f"근거: 의무보유확약기간별 수요예측 참여내역, PDF {answer.page}쪽. {filing.source_url}",
+        ])
+        return "\n".join(lines)
+    return "계산 보류 | 조회한 공시의 의무보유확약 표에서 미확약 수량과 전체 신청 수량을 검증하지 못했습니다."
 
 
 def format_schedule(schedule: SubscriptionCandidates) -> str:

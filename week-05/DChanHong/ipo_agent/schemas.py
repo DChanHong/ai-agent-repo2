@@ -80,6 +80,7 @@ class SubscriptionCandidates(Schema):
     end: date
     candidates: list[SubscriptionCandidate]
     analysis_companies: list[str]
+    first_closing_only: bool = False
     issues: list[str]
 
 

@@ -1,5 +1,6 @@
 import argparse
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
@@ -8,7 +9,7 @@ from agents import MaxTurnsExceeded, RunHooks, Runner
 from pydantic import BaseModel
 
 from ipo_agent.agents.subscription import (
-    assessment_agent, format_assessment, format_schedule, subscription_agent,
+    LockupRateAnswer, assessment_agent, format_assessment, format_lockup_rate, format_schedule, subscription_agent,
 )
 from ipo_agent.schemas import SubscriptionCandidates
 
@@ -60,10 +61,42 @@ def run_request(request: str, max_turns: int = MAX_TURNS, *, record: RunRecord |
         remaining -= len(result.raw_responses)
         outputs = tool_outputs(result.new_items)
         plan = result.final_output.answer
+        schedule = next((o for o in reversed(outputs) if isinstance(o, SubscriptionCandidates)), None)
+        # 모델이 전체 일정을 조회한 경우에도 사용자가 명시한 최초 마감 조건을 검증합니다.
+        first_closing = re.search(r"마감(?:일)?[이가]?\s*(?:가장|제일)\s*(?:빠른|이른|먼저)|"
+                                  r"(?:가장|제일)\s*(?:먼저|빨리)\s*마감|최초\s*마감", request)
+        rate_question = "확약" in request and ("신청률" in request or "확약률" in request or "비율" in request)
+        if (first_closing or (schedule and schedule.first_closing_only)) and (
+            isinstance(plan, LockupRateAnswer) or rate_question
+        ):
+            if not schedule or not schedule.candidates:
+                record.stop_reason = "최초 마감 종목을 확인할 일정이 없습니다."
+                return f"계산 보류 | {record.stop_reason}"
+            # 일정 도구가 마감일, 회사명, 종목코드 순으로 정렬합니다.
+            selected = schedule.candidates[0]
+            if not selected.filing:
+                record.stop_reason = f"{selected.company}의 공시 PDF가 미등록입니다."
+                return f"계산 보류 | {record.stop_reason}"
+            receipt = selected.filing.receipt_no
+            if not isinstance(plan, LockupRateAnswer) or plan.receipt_no != receipt:
+                record.stop_reason = f"선정한 {selected.company}의 접수번호 {receipt}와 일치하는 답변이 필요합니다."
+                if remaining <= 0:
+                    return f"목표 미달성 | {max_turns}턴 한도 도달. {record.stop_reason}"
+                prompt = (f"{request}\n일정 조회에서 조건을 충족한 종목은 {selected.company} "
+                          f"(마감일 {selected.closes_on}, 접수번호 {receipt})입니다. "
+                          "이 접수번호로 공시를 조회하고 LockupRateAnswer를 반환하세요.")
+                result = Runner.run_sync(subscription_agent, prompt, max_turns=remaining, hooks=record)
+                outputs.extend(tool_outputs(result.new_items))
+                plan = result.final_output.answer
+                if not isinstance(plan, LockupRateAnswer) or plan.receipt_no != receipt:
+                    return f"계산 보류 | {record.stop_reason}"
+        if isinstance(plan, LockupRateAnswer):
+            answer = format_lockup_rate(plan, outputs)
+            record.stop_reason = answer if answer.startswith("계산 보류") else "선택한 공시 원문 수량을 검증하고 계산을 마쳤습니다."
+            return answer
         if isinstance(plan, str):
             return plan
 
-        schedule = next((o for o in reversed(outputs) if isinstance(o, SubscriptionCandidates)), None)
         if plan.include_schedule:
             if schedule is None:
                 record.stop_reason = "청약 일정을 확인하지 못해 분석 대상을 정할 수 없습니다."

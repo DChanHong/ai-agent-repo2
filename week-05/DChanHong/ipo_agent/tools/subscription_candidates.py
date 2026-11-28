@@ -8,12 +8,15 @@ from ipo_agent.schemas import FilingReference, SubscriptionCandidate, Subscripti
 
 
 @function_tool(output_type=SubscriptionCandidates)
-def find_subscription_candidates(start: date, end: date) -> SubscriptionCandidates:
+def find_subscription_candidates(
+    start: date, end: date, first_closing_only: bool = False,
+) -> SubscriptionCandidates:
     """조회 기간과 겹치는 일반기업 IPO 청약 일정, 로컬 공시와 상세 분석 대상 최대 3곳을 조회합니다.
 
     Args:
         start: 조회 시작일입니다.
         end: 조회 종료일입니다. 시작일과 종료일 모두 포함합니다.
+        first_closing_only: 가장 먼저 마감하는 한 종목을 요청하면 True입니다. 같은 날이면 회사명 가나다순 첫 종목을 반환합니다.
     """
     candidates = {}
     issues = []
@@ -50,5 +53,7 @@ def find_subscription_candidates(start: date, end: date) -> SubscriptionCandidat
     except (ValueError, KisError) as exc:
         issues.append(str(exc))
     ordered = sorted(candidates.values(), key=lambda item: (item.closes_on, item.company, item.stock_code))
-    return SubscriptionCandidates(start=start, end=end, candidates=ordered,
+    if first_closing_only:
+        ordered = ordered[:1]
+    return SubscriptionCandidates(start=start, end=end, candidates=ordered, first_closing_only=first_closing_only,
                                   analysis_companies=[item.company for item in ordered[:3]], issues=issues)
